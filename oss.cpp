@@ -22,6 +22,11 @@ struct PCB {
     int messagesSent;
 };
 
+struct MessageBuffer {
+    long mtype;
+    int process_running; // 1 if running, 0 if not
+};
+
 // Globals
 key_t sh_key = ftok("oss.cpp", 0);
 int shmid = shmget(sh_key, sizeof(int)*2, IPC_CREAT | 0666);
@@ -30,15 +35,22 @@ int *sec;
 vector <PCB> table(10);
 const int increment_amount = 10000;
 
-void increment_clock(int* sec, int* nano, int amt) {
+// setup message queue
+key_t msg_key = ftok("oss.cpp", 1);
+int msgid = msgget(msg_key, IPC_CREAT | 0666);
+
+void increment_clock(int* sec, int* nano, int running_children) {
     const long long NSEC_PER_SEC = 1000000000LL;
-    long long total = (long long)(*nano) + (long long)amt;
-    if (total >= NSEC_PER_SEC) {
-        *sec += (int)(total / NSEC_PER_SEC);
-        *nano = (int)(total % NSEC_PER_SEC);
-    } else {
-        *nano = (int)total;
-    }
+    const long long BASE_INC_NS = 250000000LL; // 250 ms in ns
+
+    // If there are children, divide the 250ms evenly among them.
+    // If no children, advance by full 250ms.
+    long long inc_ns = (running_children > 0) ? (BASE_INC_NS / running_children) : BASE_INC_NS;
+    if (inc_ns <= 0) inc_ns = 1; // guard against zero
+
+    long long total = (long long)(*nano) + inc_ns;
+    *sec += (int)(total / NSEC_PER_SEC);
+    *nano = (int)(total % NSEC_PER_SEC);
 }
 
 // convert float time interval to seconds and nanoseconds and return nannoseconds
@@ -135,9 +147,25 @@ void signal_handler(int sig) {
         // Terminate all child processes and clean up shared memory
         shmdt(shm_clock);
         shmctl(shmid, IPC_RMID, nullptr);
+        msgctl(msgid, IPC_RMID, nullptr);
         kill(0, SIGTERM); 
         exit(0);
     }
+}
+
+pid_t select_next_worker(const vector<PCB> &table) {
+    static int last_idx = -1;
+    size_t n = table.size();
+    if (n == 0) return (pid_t)-1;
+    // try each slot once, starting after last_idx
+    for (size_t i = 1; i <= n; ++i) {
+        size_t idx = (last_idx + i) % n;
+        if (table[idx].occupied) {
+            last_idx = (int)idx;
+            return table[idx].pid;
+        }
+    }
+    return (pid_t)-1;
 }
 
 int main(int argc, char* argv[]) {
@@ -146,9 +174,10 @@ int main(int argc, char* argv[]) {
     int simul = -1;
     float time_limit = -1;
     float launch_interval = -1;
+    string log_file = "";
     int opt;
 
-    while((opt = getopt(argc, argv, "hn:s:t:i:")) != -1) {
+    while((opt = getopt(argc, argv, "hn:s:t:i:f:")) != -1) {
         switch(opt) {
             case 'h': {
                 cout << "Usage: oss -n proc -s simul -t time_limit -i launch_interval\n"
@@ -199,6 +228,11 @@ int main(int argc, char* argv[]) {
                 launch_interval = val;
                 break;
             }
+            case 'f': {
+                // Optional: handle log file name if needed
+                log_file = optarg;
+                break;
+            }
             default:
                 cerr << "Error: All options -n, -s, -t, and -i are required and must be non-negative integers." << endl;
                 exit(1);
@@ -246,15 +280,54 @@ int main(int argc, char* argv[]) {
     long long launch_interval_nano = (long long)(launch_interval * 1e9); // convert launch interval to nanoseconds
     long long next_launch_total = 0; 
 
-    while (launched_processes < proc || running_processes > 0) {
-        increment_clock(sec, nano, increment_amount);
+    MessageBuffer sndMessage;
+    int message_count = 0;
 
-        // checking if child has terminated
-        pid_t term_pid = child_Terminated();
-        if (term_pid > 0) {
-            remove_pcb(table, term_pid);
-            running_processes--;
-            cout << "OSS: Child process terminated: " << term_pid << endl;
+    while (launched_processes < proc || running_processes > 0) {
+        increment_clock(sec, nano, running_processes);
+
+        // send message to next worker in round-robin fashion
+        pid_t next_worker_pid = select_next_worker(table);
+        int target_idx = -1;
+
+        if (next_worker_pid != (pid_t)-1) {
+            // find the index in the PCB table for printing
+            for (size_t i = 0; i < table.size(); ++i) {
+                if (table[i].occupied && table[i].pid == next_worker_pid) {
+                    target_idx = (int)i;
+                    break;
+                }
+            }
+            cout << "OSS: Sending message to worker " << target_idx
+                 << " PID " << next_worker_pid <<  " at " << *sec << " seconds and " << *nano << " nanoseconds." << endl;
+
+            // prepare and send message to the selected worker
+            sndMessage.mtype = next_worker_pid;
+            sndMessage.process_running = 1;
+            if (msgsnd(msgid, &sndMessage, sizeof(sndMessage.process_running), 0) == -1) {
+                perror("msgsnd");
+                exit(1);
+            }
+            message_count++;
+
+            // receive reply from worker we just pinged
+            MessageBuffer rcvMessage;
+            if (msgrcv(msgid, &rcvMessage, sizeof(rcvMessage.process_running), getpid(), 0) == -1) {
+                perror("msgrcv");
+                exit(1);
+            }
+
+            cout << "OSS: Received reply (process_running=" << rcvMessage.process_running
+                 << ") from worker table index " << target_idx
+                 << " PID " << next_worker_pid << " at " << *sec << " seconds and " << *nano << " nanoseconds." << endl;
+
+            // If worker reported it is done, clean up PCB and counters
+            if (rcvMessage.process_running == 0) {
+                cout << "OSS: Worker " << target_idx << " PID " << next_worker_pid << " has decided to terminate." << endl;
+                wait(0);
+                remove_pcb(table, next_worker_pid);
+                running_processes = max(0, running_processes - 1);
+            }
         }
 
         // call print_process_table every half-second of simulated time
@@ -284,13 +357,16 @@ int main(int argc, char* argv[]) {
 
             // Update the next allowed launch time
             next_launch_total = current_total + launch_interval_nano;
+            print_process_table(table);
         }
     }
 
+    cout << "OSS terminating after reaching process limit and all workers have finished." << endl;
     cout << "Number of processes launched: " << launched_processes << endl;
-    cout << "Workers ran for a combined total of " << *sec << " seconds and " << *nano << " nanoseconds." << endl;
+    cout << "Number of messages sent: " << message_count << endl;
 
     shmdt(shm_clock);
     shmctl(shmid, IPC_RMID, nullptr);
+    msgctl(msgid, IPC_RMID, nullptr);
     return 0;
 }

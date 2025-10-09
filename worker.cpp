@@ -6,8 +6,14 @@
 #include <string>
 #include <cstdio>
 #include <cstdlib>
+#include <errno.h>
 
 using namespace std;
+
+struct MessageBuffer {
+    long mtype;
+    int process_running; // 1 if running, 0 if not
+};
 
 int main(int argc, char* argv[]) {
     key_t sh_key = ftok("oss.cpp", 0);
@@ -33,6 +39,14 @@ int main(int argc, char* argv[]) {
     int target_seconds = stoi(argv[1]);
     int target_nano = stoi(argv[2]);
 
+    // setup message queue
+    key_t msg_key = ftok("oss.cpp", 1);
+    int msgid = msgget(msg_key, 0666);
+    if (msgid == -1) {
+        perror("msgget");
+        exit(1);
+    }
+
     // Print starting message
     cout << "Worker starting, " << "PID:" << getpid() << " PPID:" << getppid() << endl
          << "Called With:" << endl
@@ -51,23 +65,53 @@ int main(int argc, char* argv[]) {
          << "SysClockS: " << *sec << " SysclockNano: " << *nano << " TermTimeS: " << end_seconds << " TermTimeNano: " << end_nano << endl
          << "--Just Starting" << endl;
 
-    // loop to check system clock
+    // message-driven loop: block until OSS tells us to check the clock
+    MessageBuffer msg;
+    pid_t oss_pid = getppid();
     int last_sec = *sec;
     int passed_seconds = 0;
-    while (!((*sec > end_seconds) || (*sec == end_seconds && *nano >= end_nano))) {
-        if (*sec > last_sec) {
+    int message_count = 0;
+
+    while (true) {
+        // block until oss sends a message addressed to this worker (mtype == this pid)
+        if (msgrcv(msgid, &msg, sizeof(msg.process_running), getpid(), 0) == -1) {
+            if (errno == EINTR) continue;
+            perror("msgrcv");
+            break;
+        }
+
+        // Print message received
+        cout << "Worker PID:" << getpid() << " PPID:" << getppid() << endl
+         << "SysClockS: " << *sec << " SysclockNano: " << *nano << " TermTimeS: " << end_seconds << " TermTimeNano: " << end_nano << endl
+         << "-- " << ++message_count << " messages received from oss" << endl;
+
+        // After receiving the ping, check if it's time to terminate
+        bool should_terminate = ((*sec > end_seconds) || (*sec == end_seconds && *nano >= end_nano));
+
+        if (should_terminate) {
+            // print terminating message
             cout << "Worker PID:" << getpid() << " PPID:" << getppid() << endl
                  << "SysClockS: " << *sec << " SysclockNano: " << *nano << " TermTimeS: " << end_seconds << " TermTimeNano: " << end_nano << endl
-                 <<"--" << ++passed_seconds << " seconds have passed" << endl;
-            last_sec = *sec;
+                 << "--Terminating after sending message back to oss after " << message_count << " received messages." << endl;
+
+            // notify OSS that this process is no longer running (process_running = 0)
+            MessageBuffer reply;
+            reply.mtype = (long)oss_pid;
+            reply.process_running = 0;
+            if (msgsnd(msgid, &reply, sizeof(reply.process_running), 0) == -1) {
+                perror("msgsnd");
+            }
+            break; // exit loop and terminate
+        } else {
+            // notify OSS that this process is still running (process_running = 1)
+            MessageBuffer reply;
+            reply.mtype = (long)oss_pid;
+            reply.process_running = 1;
+            if (msgsnd(msgid, &reply, sizeof(reply.process_running), 0) == -1) {
+                perror("msgsnd");
+            }
         }
     }
-
-    // worker terminating message
-    cout << "Worker PID:" << getpid() << " PPID:" << getppid() << endl
-         << "SysClockS: " << *sec << " SysclockNano: " << *nano << " TermTimeS: " << end_seconds << " TermTimeNano: " << end_nano << endl
-         << "--Terminating" << endl;
-
     shmdt(clock);
     return 0;
 }
