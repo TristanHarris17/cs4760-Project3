@@ -1,24 +1,7 @@
 Name: Tristan Harris
-Date: 9/18/2025
+Date: 10/9/2025 
 Environment: Linux (WSL), Visual Studio Code
 Version Control: GitHub https://github.com/TristanHarris17/cs4760-Project2.git
 How to compile the project:
 Type ’make’
 Example of how to run the project:
-./oss -n 3 -s 2 -t 5 -i 2
-
-Generative AI used: chatgpt
-Prompts: 
-Give me some alternatives to storing PCB structs in an array. 
-
-Write a function that finds the first empty pcb in the vector and returns its position.
-
-Write a function that outputs the process table in a formatted way 
-
-Write a help message for this program
-
-Summary: 
-Gave me the method of storing PCB info in a vector and helped me with some syntax related to the vector library.
-Wrote both functions I asked it to with no issues.
-It also helped with errors as they appeared when testing mostly syntax related.
-

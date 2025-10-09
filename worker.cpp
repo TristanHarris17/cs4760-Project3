@@ -1,6 +1,7 @@
 #include <iostream>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <sys/msg.h>
 #include <unistd.h>
 #include <string>
 #include <cstdio>

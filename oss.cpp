@@ -1,6 +1,7 @@
 #include <iostream>
 #include <sys/ipc.h>
 #include <sys/shm.h>
+#include <sys/msg.h>
 #include <unistd.h>
 #include <string>
 #include <cstdio>
@@ -9,6 +10,7 @@
 #include <vector>
 #include <iomanip>
 #include <signal.h>
+#include <random>
 
 using namespace std;
 
@@ -17,6 +19,7 @@ struct PCB {
     pid_t pid;
     int start_sec;
     int start_nano;
+    int messagesSent;
 };
 
 // Globals
@@ -155,8 +158,9 @@ int main(int argc, char* argv[]) {
                     << "  -s simul          Maximum number of simultaneous worker processes (positive integer)\n"
                     << "  -t time_limit     Time limit for each worker process in seconds (non-negative float)\n"
                     << "  -i launch_interval Interval between launching worker processes in seconds (non-negative float)\n"
+                    << "  -f logfile        Log file name (optional)\n"
                     << "Example:\n"
-                    << "  ./oss -n 10 -s 3 -t 2.5 -i 0.5\n";
+                    << "  ./oss -n 10 -s 3 -t 2.5 -i 0.5 -f oss.log\n";
                 exit(0);
             }
             case 'n': {
@@ -223,7 +227,12 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signal_handler);
     alarm(60);
 
-    // oss staring message
+    // Initialize random number generator
+    random_device rd;
+    mt19937 gen(rd());
+    uniform_real_distribution<double> dis(1, time_limit);
+
+    // oss starting message
     cout << "OSS starting, PID:" << getpid() << " PPID:" << getppid() << endl
          << "Called With:" << endl
          << "-n: " << proc << endl
@@ -260,7 +269,8 @@ int main(int argc, char* argv[]) {
         // Check if it's time to launch a new worker
         long long current_total = (long long)(*sec) * NSEC_PER_SEC + (long long)(*nano);
         if (launched_processes < proc && running_processes < simul && current_total >= next_launch_total) {
-            pid_t worker_pid = launch_worker(time_limit);
+            float worker_time = dis(gen);
+            pid_t worker_pid = launch_worker(worker_time);
 
             // Find empty slot in PCB array and populate it with new process info
             int pcb_index = find_empty_pcb(table);
