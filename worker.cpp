@@ -4,7 +4,6 @@
 #include <sys/msg.h>
 #include <unistd.h>
 #include <string>
-#include <cstdio>
 #include <cstdlib>
 #include <errno.h>
 
@@ -21,14 +20,14 @@ int main(int argc, char* argv[]) {
     // create/get shared memory
     int shmid = shmget(sh_key, sizeof(int)*2, 0666);
     if (shmid == -1) {
-        perror("shmget");
+        cerr << "shmget";
         exit(1);
     }
 
     // attach shared memory to shm_ptr
     int* clock = (int*) shmat(shmid, nullptr, 0);
     if (clock == (int*) -1) {
-        perror("shmat");
+        cerr << "shmat";
         exit(1);
     }
 
@@ -43,7 +42,7 @@ int main(int argc, char* argv[]) {
     key_t msg_key = ftok("oss.cpp", 1);
     int msgid = msgget(msg_key, 0666);
     if (msgid == -1) {
-        perror("msgget");
+        cerr << "msgget";
         exit(1);
     }
 
@@ -68,15 +67,13 @@ int main(int argc, char* argv[]) {
     // message-driven loop: block until OSS tells us to check the clock
     MessageBuffer msg;
     pid_t oss_pid = getppid();
-    int last_sec = *sec;
-    int passed_seconds = 0;
     int message_count = 0;
 
     while (true) {
         // block until oss sends a message addressed to this worker (mtype == this pid)
         if (msgrcv(msgid, &msg, sizeof(msg.process_running), getpid(), 0) == -1) {
             if (errno == EINTR) continue;
-            perror("msgrcv");
+            cerr << "msgrcv failed" << endl;
             break;
         }
 
@@ -99,7 +96,7 @@ int main(int argc, char* argv[]) {
             reply.mtype = (long)oss_pid;
             reply.process_running = 0;
             if (msgsnd(msgid, &reply, sizeof(reply.process_running), 0) == -1) {
-                perror("msgsnd");
+                cerr << "msgsnd failed" << endl;
             }
             break; // exit loop and terminate
         } else {
@@ -108,7 +105,7 @@ int main(int argc, char* argv[]) {
             reply.mtype = (long)oss_pid;
             reply.process_running = 1;
             if (msgsnd(msgid, &reply, sizeof(reply.process_running), 0) == -1) {
-                perror("msgsnd");
+                cerr << "msgsnd failed" << endl;
             }
         }
     }

@@ -4,13 +4,14 @@
 #include <sys/msg.h>
 #include <unistd.h>
 #include <string>
-#include <cstdio>
 #include <cstdlib>
 #include <sys/wait.h>
 #include <vector>
 #include <iomanip>
 #include <signal.h>
 #include <random>
+#include <fstream>
+#include <sstream>
 
 using namespace std;
 
@@ -242,7 +243,7 @@ int main(int argc, char* argv[]) {
     // attach shared memory to shm_ptr
     shm_clock = (int*) shmat(shmid, nullptr, 0);
     if (shm_clock == (int*) -1) {
-        perror("shmat");
+        cerr << "shmat";
         exit(1);
     }
 
@@ -266,14 +267,34 @@ int main(int argc, char* argv[]) {
     mt19937 gen(rd());
     uniform_real_distribution<double> dis(1, time_limit);
 
-    // oss starting message
-    cout << "OSS starting, PID:" << getpid() << " PPID:" << getppid() << endl
-         << "Called With:" << endl
-         << "-n: " << proc << endl
-         << "-s: " << simul << endl
-         << "-t: " << time_limit << endl
-         << "-i: " << launch_interval << endl;
+    // open log file if specified
+    ofstream log_fs;
+    if (!log_file.empty()) {
+        log_fs.open(log_file);
+        if (!log_fs) {
+            cerr << "Error: Could not open log file " << log_file << endl;
+            exit(1);
+        }
+    }
 
+    // helper to log messages originating from OSS (writes to stdout and to log file if open)
+    auto oss_log = [&](const string &s) {
+        cout << s;
+        if (log_fs.is_open()) log_fs << s;
+    };
+
+    // oss starting message
+    {
+        ostringstream ss;
+        ss << "OSS starting, PID:" << getpid() << " PPID:" << getppid() << endl
+           << "Called With:" << endl
+           << "-n: " << proc << endl
+           << "-s: " << simul << endl
+           << "-t: " << time_limit << endl
+           << "-i: " << launch_interval << endl;
+        oss_log(ss.str());
+    }
+ 
     int launched_processes = 0;
     int running_processes = 0;
 
@@ -298,37 +319,52 @@ int main(int argc, char* argv[]) {
                     break;
                 }
             }
-            cout << "OSS: Sending message to worker " << target_idx
-                 << " PID " << next_worker_pid <<  " at " << *sec << " seconds and " << *nano << " nanoseconds." << endl;
+
+            {
+                ostringstream ss;
+                ss << "OSS: Sending message to worker " << target_idx
+                   << " PID " << next_worker_pid <<  " at " << *sec << " seconds and " << *nano << " nanoseconds." << endl;
+                oss_log(ss.str());
+            }
 
             // prepare and send message to the selected worker
             sndMessage.mtype = next_worker_pid;
             sndMessage.process_running = 1;
             if (msgsnd(msgid, &sndMessage, sizeof(sndMessage.process_running), 0) == -1) {
-                perror("msgsnd");
+                cerr << "msgsnd";
                 exit(1);
             }
+            // increment message count for this worker
+            table[target_idx].messagesSent++;
             message_count++;
 
             // receive reply from worker we just pinged
             MessageBuffer rcvMessage;
             if (msgrcv(msgid, &rcvMessage, sizeof(rcvMessage.process_running), getpid(), 0) == -1) {
-                perror("msgrcv");
+                cerr << "msgrcv";
                 exit(1);
             }
 
-            cout << "OSS: Received reply (process_running=" << rcvMessage.process_running
-                 << ") from worker table index " << target_idx
-                 << " PID " << next_worker_pid << " at " << *sec << " seconds and " << *nano << " nanoseconds." << endl;
+            {
+                ostringstream ss;
+                ss << "OSS: Received reply (process_running=" << rcvMessage.process_running
+                   << ") from worker table index " << target_idx
+                   << " PID " << next_worker_pid << " at " << *sec << " seconds and " << *nano << " nanoseconds." << endl;
+                oss_log(ss.str());
+            }
 
             // If worker reported it is done, clean up PCB and counters
             if (rcvMessage.process_running == 0) {
-                cout << "OSS: Worker " << target_idx << " PID " << next_worker_pid << " has decided to terminate." << endl;
-                wait(0);
-                remove_pcb(table, next_worker_pid);
-                running_processes = max(0, running_processes - 1);
-            }
-        }
+                {
+                    ostringstream ss;
+                    ss << "OSS: Worker " << target_idx << " PID " << next_worker_pid << " has decided to terminate." << endl;
+                    oss_log(ss.str());
+                }
+                 wait(0);
+                 remove_pcb(table, next_worker_pid);
+                 running_processes = max(0, running_processes - 1);
+             }
+         }
 
         // call print_process_table every half-second of simulated time
         {
@@ -361,12 +397,16 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    cout << "OSS terminating after reaching process limit and all workers have finished." << endl;
-    cout << "Number of processes launched: " << launched_processes << endl;
-    cout << "Number of messages sent: " << message_count << endl;
-
-    shmdt(shm_clock);
-    shmctl(shmid, IPC_RMID, nullptr);
-    msgctl(msgid, IPC_RMID, nullptr);
-    return 0;
-}
+    {
+        ostringstream ss;
+        ss << "OSS terminating after reaching process limit and all workers have finished." << endl;
+        ss << "Number of processes launched: " << launched_processes << endl;
+        ss << "Number of messages sent: " << message_count << endl;
+        oss_log(ss.str());
+    }
+ 
+     shmdt(shm_clock);
+     shmctl(shmid, IPC_RMID, nullptr);
+     msgctl(msgid, IPC_RMID, nullptr);
+     return 0;
+ }
