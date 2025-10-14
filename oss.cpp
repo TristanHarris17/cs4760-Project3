@@ -33,7 +33,7 @@ key_t sh_key = ftok("oss.cpp", 0);
 int shmid = shmget(sh_key, sizeof(int)*2, IPC_CREAT | 0666);
 int *shm_clock;
 int *sec;
-vector <PCB> table(10);
+vector <PCB> table(20);
 const int increment_amount = 10000;
 
 // setup message queue
@@ -123,8 +123,9 @@ void print_process_table(const std::vector<PCB> &table) {
          << std::setw(10) << "Occ"
          << std::setw(12) << "PID"
          << std::setw(12) << "StartSec"
-         << std::setw(12) << "StartNano" << endl;
-    cout << std::string(52, '-') << endl;
+         << std::setw(12) << "StartNano"
+         << std::setw(12) << "MsgsSent" << endl;
+    cout << std::string(64, '-') << endl;
 
     for (size_t i = 0; i < table.size(); ++i) {
         const PCB &p = table[i];
@@ -133,9 +134,10 @@ void print_process_table(const std::vector<PCB> &table) {
         if (p.occupied) {
             cout << std::setw(12) << p.pid
                  << std::setw(12) << p.start_sec
-                 << std::setw(12) << p.start_nano;
+                 << std::setw(12) << p.start_nano
+                 << std::setw(12) << p.messagesSent;
         } else {
-            cout << std::setw(12) << "-" << std::setw(12) << "-" << std::setw(12) << "-";
+            cout << std::setw(12) << "-" << std::setw(12) << "-" << std::setw(12) << "-" << std::setw(12) << "-";
         }
         cout << endl;
     }
@@ -152,6 +154,13 @@ void signal_handler(int sig) {
         kill(0, SIGTERM); 
         exit(0);
     }
+}
+
+void exit_handler() {
+    shmdt(shm_clock);
+    shmctl(shmid, IPC_RMID, nullptr);
+    msgctl(msgid, IPC_RMID, nullptr);
+    exit(1);
 }
 
 pid_t select_next_worker(const vector<PCB> &table) {
@@ -191,13 +200,13 @@ int main(int argc, char* argv[]) {
                     << "  -f logfile        Log file name (optional)\n"
                     << "Example:\n"
                     << "  ./oss -n 10 -s 3 -t 2.5 -i 0.5 -f oss.log\n";
-                exit(0);
+                exit_handler();
             }
             case 'n': {
                 int val = stoi(optarg);
                 if (val < 0) {
                     cerr << "Error: -n must be a non-negative integer." << endl;
-                    exit(1);
+                    exit_handler();
                 }
                 proc = val;
                 break;
@@ -206,7 +215,7 @@ int main(int argc, char* argv[]) {
                 int val = stoi(optarg);
                 if (val < 0) {
                     cerr << "Error: -s must be a positive integer." << endl;
-                    exit(1);
+                    exit_handler();
                 }
                 simul = val;
                 break;
@@ -215,7 +224,7 @@ int main(int argc, char* argv[]) {
                 float val = stof(optarg);
                 if (val < 0) {
                     cerr << "Error: -t must be a non-negative integer." << endl;
-                    exit(1);
+                    exit_handler();
                 }
                 time_limit = val;
                 break;
@@ -224,7 +233,7 @@ int main(int argc, char* argv[]) {
                 float val = stof(optarg);
                 if (val < 0) {
                     cerr << "Error: -i must be a non-negative integer." << endl;
-                    exit(1);
+                    exit_handler();
                 }
                 launch_interval = val;
                 break;
@@ -236,15 +245,20 @@ int main(int argc, char* argv[]) {
             }
             default:
                 cerr << "Error: All options -n, -s, -t, and -i are required and must be non-negative integers." << endl;
-                exit(1);
+                exit_handler();
         }
+    }
+
+    if(proc == -1 || simul == -1 || time_limit == -1 || launch_interval == -1) {
+        cerr << "Error: All options -n, -s, -t, and -i are required and must be non-negative integers." << endl;
+        exit_handler();
     }
 
     // attach shared memory to shm_ptr
     shm_clock = (int*) shmat(shmid, nullptr, 0);
     if (shm_clock == (int*) -1) {
         cerr << "shmat";
-        exit(1);
+        exit_handler();
     }
 
     // pointers to seconds and nanoseconds in shared memory
@@ -332,7 +346,7 @@ int main(int argc, char* argv[]) {
             sndMessage.process_running = 1;
             if (msgsnd(msgid, &sndMessage, sizeof(sndMessage.process_running), 0) == -1) {
                 cerr << "msgsnd";
-                exit(1);
+                exit_handler();
             }
             
             // increment message count for this worker
@@ -343,7 +357,7 @@ int main(int argc, char* argv[]) {
             MessageBuffer rcvMessage;
             if (msgrcv(msgid, &rcvMessage, sizeof(rcvMessage.process_running), getpid(), 0) == -1) {
                 cerr << "msgrcv";
-                exit(1);
+                exit_handler();
             }
 
             {
