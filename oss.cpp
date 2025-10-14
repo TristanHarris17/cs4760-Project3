@@ -334,6 +334,7 @@ int main(int argc, char* argv[]) {
                 cerr << "msgsnd";
                 exit(1);
             }
+            
             // increment message count for this worker
             table[target_idx].messagesSent++;
             message_count++;
