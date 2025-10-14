@@ -178,6 +178,11 @@ pid_t select_next_worker(const vector<PCB> &table) {
     return (pid_t)-1;
 }
 
+// helper to detect empty/blank optarg
+static inline bool optarg_blank(const char* s) {
+    return (s == nullptr) || (s[0] == '\0');
+}
+
 int main(int argc, char* argv[]) {
     //parse command line args
     int proc = -1;
@@ -203,54 +208,83 @@ int main(int argc, char* argv[]) {
                 exit_handler();
             }
             case 'n': {
-                int val = stoi(optarg);
-                if (val < 0) {
+                if (optarg_blank(optarg)) {
+                    cerr << "Error: -n requires a non-blank argument." << endl;
+                    exit_handler();
+                }
+                try {
+                    int val = stoi(optarg);
+                    if (val < 0) throw invalid_argument("negative");
+                    proc = val;
+                } catch (...) {
                     cerr << "Error: -n must be a non-negative integer." << endl;
                     exit_handler();
                 }
-                proc = val;
-                break;
+                 break;
             }
             case 's': {
-                int val = stoi(optarg);
-                if (val < 0) {
+                if (optarg_blank(optarg)) {
+                    cerr << "Error: -s requires a non-blank argument." << endl;
+                    exit_handler();
+                }
+                try {
+                    int val = stoi(optarg);
+                    if (val <= 0) throw invalid_argument("non-positive");
+                    simul = val;
+                } catch (...) {
                     cerr << "Error: -s must be a positive integer." << endl;
                     exit_handler();
                 }
-                simul = val;
-                break;
+                 break;
             }
             case 't': {
-                float val = stof(optarg);
-                if (val < 0) {
-                    cerr << "Error: -t must be a non-negative integer." << endl;
+                if (optarg_blank(optarg)) {
+                    cerr << "Error: -t requires a non-blank argument." << endl;
                     exit_handler();
                 }
-                time_limit = val;
-                break;
+                try {
+                    float val = stof(optarg);
+                    if (val < 0.0f) throw invalid_argument("negative");
+                    time_limit = val;
+                } catch (...) {
+                    cerr << "Error: -t must be a non-negative number." << endl;
+                    exit_handler();
+                }
+                 break;
             }
             case 'i': {
-                float val = stof(optarg);
-                if (val < 0) {
-                    cerr << "Error: -i must be a non-negative integer." << endl;
+                if (optarg_blank(optarg)) {
+                    cerr << "Error: -i requires a non-blank argument." << endl;
                     exit_handler();
                 }
-                launch_interval = val;
-                break;
+                try {
+                    float val = stof(optarg);
+                    if (val < 0.0f) throw invalid_argument("negative");
+                    launch_interval = val;
+                } catch (...) {
+                    cerr << "Error: -i must be a non-negative number." << endl;
+                    exit_handler();
+                }
+                 break;
             }
             case 'f': {
                 // Optional: handle log file name if needed
-                log_file = optarg;
-                break;
+                if (!optarg_blank(optarg)) log_file = optarg;
+                else {
+                    cerr << "Error: -f requires a non-blank filename." << endl;
+                    exit_handler();
+                }
+                 break;
             }
             default:
-                cerr << "Error: All options -n, -s, -t, and -i are required and must be non-negative integers." << endl;
+                cerr << "Error: Unknown option or missing argument." << endl;
                 exit_handler();
         }
     }
 
-    if(proc == -1 || simul == -1 || time_limit == -1 || launch_interval == -1) {
-        cerr << "Error: All options -n, -s, -t, and -i are required and must be non-negative integers." << endl;
+    // final validation of required options
+    if (proc == -1 || simul == -1 || time_limit < 0.0f || launch_interval < 0.0f) {
+        cerr << "Error: Missing required options. Usage: ./oss -n proc -s simul -t time_limit -i launch_interval [-f logfile]" << endl;
         exit_handler();
     }
 
