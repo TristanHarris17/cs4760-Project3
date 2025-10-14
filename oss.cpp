@@ -21,6 +21,7 @@ struct PCB {
     int start_sec;
     int start_nano;
     int messagesSent;
+    int workerID;
 };
 
 struct MessageBuffer {
@@ -35,6 +36,7 @@ int *shm_clock;
 int *sec;
 vector <PCB> table(20);
 const int increment_amount = 10000;
+static int nextWorkerID = 0;
 
 // setup message queue
 key_t msg_key = ftok("oss.cpp", 1);
@@ -370,7 +372,7 @@ int main(int argc, char* argv[]) {
 
             {
                 ostringstream ss;
-                ss << "OSS: Sending message to worker " << target_idx
+                ss << "OSS: Sending message to worker " << table[target_idx].workerID
                    << " PID " << next_worker_pid <<  " at " << *sec << " seconds and " << *nano << " nanoseconds." << endl;
                 oss_log(ss.str());
             }
@@ -396,8 +398,7 @@ int main(int argc, char* argv[]) {
 
             {
                 ostringstream ss;
-                ss << "OSS: Received reply (process_running=" << rcvMessage.process_running
-                   << ") from worker table index " << target_idx
+                ss << "OSS: Received reply from worker " << table[target_idx].workerID << " process_running=" << rcvMessage.process_running
                    << " PID " << next_worker_pid << " at " << *sec << " seconds and " << *nano << " nanoseconds." << endl;
                 oss_log(ss.str());
             }
@@ -406,7 +407,7 @@ int main(int argc, char* argv[]) {
             if (rcvMessage.process_running == 0) {
                 {
                     ostringstream ss;
-                    ss << "OSS: Worker " << target_idx << " PID " << next_worker_pid << " has decided to terminate." << endl;
+                    ss << "OSS: Worker " << table[target_idx].workerID << " PID " << next_worker_pid << " has decided to terminate." << endl;
                     oss_log(ss.str());
                 }
                  wait(0);
@@ -436,6 +437,7 @@ int main(int argc, char* argv[]) {
             table[pcb_index].pid = worker_pid;
             table[pcb_index].start_sec = *sec;
             table[pcb_index].start_nano = *nano;
+            table[pcb_index].workerID = ++nextWorkerID;
 
             launched_processes++;
             running_processes++;
